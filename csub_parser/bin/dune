@@ -1,0 +1,4 @@
+(executable
+ (public_name csub_parser)
+ (name main)
+ (libraries csub_parser))

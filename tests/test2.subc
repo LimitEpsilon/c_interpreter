@@ -1,0 +1,82 @@
+/*******          test2.c for project 2       *******/
+/* This is a test program for syntax analysis. */
+/* This program don't have float type */
+/*  but have string and charactor */
+
+int comment;
+
+struct _point {
+    int x, y, z;
+    int color;
+} point[20];
+
+struct _line {
+    struct _point p[2];
+    int color;
+} line[20];
+
+struct _model {
+    struct _line *l;
+    int cardinal;
+    char *name;
+} model;
+
+int find_large_length_line(struct _model *m);
+
+int main () 
+{
+    struct _model object1;
+    int i;
+    for(i = 0; i < 20; i++) {
+        point[i].x = i * i + 14 * i + 4;
+        point[i].y = - (i * i - 24 * i + 8);
+        point[i].z = 10 * i + 5;
+    }
+    i = 19;
+    while(i >= 0) {
+        line[i].p[0] = point[i];
+        if(i == 19) line[i].p[1] = point[0];
+        else line[i].p[1] = point[i + 1];
+        i--;
+    }
+   
+    object1.cardinal = 20;	/* not "object", "1.", "cardinal" */
+    object1.l = line;
+    object1.name = "polygon1\n";
+    /* if string pattern definition implemented,
+    you can accept this lexeme. */
+   
+    {
+        int max;
+        max = find_large_length_line(&object1);
+        /* test for dangling else */
+        if (1)
+        if (2) 2;
+        else 3;
+        /*/* test for nested comments */ */
+        return max;
+    }
+}
+
+int find_large_length_line(struct _model *m) 
+{ 
+/* subc may allow this syntex. */
+    int count;
+    int max_length;
+
+    if(*((*m).name) == 'd') return -1;	/* integer, dotdot, and integer
+   						must detected. */
+    count = (*m).cardinal;
+    max_length = -1;
+
+    while(count >= 0) {
+        int length, dx, dy, dz;
+        dx = (*m).l[count].p[0].x - (*m).l[count].p[1].x;
+        dy = (*m).l[count].p[0].y - (*m).l[count].p[1].y;
+        dz = (*m).l[count].p[0].z - (*m).l[count].p[1].z;
+        length = dx * dx + dy * dy + dz * dz;
+        if(max_length < length) max_length = length;
+        count--;
+    }
+    return max_length;
+}
