@@ -161,7 +161,15 @@ and print_stmt = function
       print_string "else ";
       print_stmt s);
     print_string ")"
-  | WHILE (_, _) | FOR (_, _, _, _) | BREAK | CONTINUE | EMPTY -> ()
+  | WHILE (_, body) ->
+    print_string "while with body : {";
+    print_stmt body;
+    print_endline "}"
+  | FOR (_, _, _, body) ->
+    print_string "for with body : {";
+    print_stmt body;
+    print_endline "}"
+  | BREAK | CONTINUE | EMPTY -> ()
 
 and print_expr = function
   | VAR x -> print_string x
