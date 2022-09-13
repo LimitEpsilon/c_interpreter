@@ -39,6 +39,8 @@ let rec handle_var_decl : (Csub.ty * (string * int option) list) -> Csub.val_dec
 %token <string> RELOP
 %token <string> EQUOP
 
+%right NOELSE
+%left ELSE
 %right ASSIGNOP
 %left LOR
 %left LAND
@@ -121,7 +123,7 @@ stmt: local { Csub.SCOPE $1 }
     | CONTINUE SEMICOLON { Csub.CONTINUE }
     | SEMICOLON { Csub.EMPTY }
     ;
-else_opt: { None }
+else_opt: %prec NOELSE { None }
     | ELSE stmt { Some $2 }
     ;
 expr_opt: { None }
