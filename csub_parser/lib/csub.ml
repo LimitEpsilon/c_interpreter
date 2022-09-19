@@ -1,19 +1,11 @@
 type pgm = toplevel list
 and toplevel = TOP_DECL of decl | FUN of fun_decl * local
 and local = decl list * stmt list
-and decl = DECL_VAL of val_decl | DECL_STRUCT of struct_decl
-and val_decl = DECL_VAR of var_decl | DECL_FUN of fun_decl
-and var_decl = ty * id * int option (* for arrays *)
+and decl = DECL_VAR of var_decl | DECL_FUN of fun_decl
+and struct_tbl = (id, decl list) Hashtbl.t
+and var_decl = ty * id
 and fun_decl = ty * id * var_decl list
-and struct_decl = id option * val_decl list
-
-and ty =
-  | INT
-  | CHAR
-  | VOID
-  | STRUCT_NAMED of id
-  | STRUCT_DECLARED of struct_decl
-  | PTR of ty  (** statements change control flow *)
+and ty = INT | CHAR | VOID | STRUCT of id | PTR of ty | ARR of ty * int
 
 and stmt =
   | SCOPE of local
@@ -24,7 +16,7 @@ and stmt =
   | FOR of expr option * expr option * expr option * stmt
   | BREAK
   | CONTINUE
-  | EMPTY (* just a semicolon *)
+  | EMPTY (* just a semicolon *)  (** statements change control flow *)
 
 and expr =
   | VAR of id
@@ -41,11 +33,55 @@ and expr =
   | ARITH_UOP of uop_arith * expr
   | REL_UOP of uop_rel * expr
 
-and bop_arith = PLUS | MINUS | MUL | DIV | MOD | BOR | BAND (* bitwise *)
+and bop_arith = ADD | SUB | MUL | DIV | MOD | BOR | BAND (* bitwise *)
 and bop_rel = GT | LT | GEQ | LEQ | LOR | LAND | EQ | NEQ
 and uop_arith = PRE_INCR | POST_INCR | PRE_DECR | POST_DECR | BNOT | NEG
 and uop_rel = LNOT
 and id = string
+
+let struct_tbl : struct_tbl = Hashtbl.create 31
+
+let insert_struct id decls =
+  if Hashtbl.mem struct_tbl id then
+    failwith ("Structure " ^ id ^ " is already defined, cannot redefine.")
+  else Hashtbl.add struct_tbl id decls
+
+let rec eval_const_integer = function
+  | VAR _ | STRING _ | ASSIGN _ | REF _ | DEREF _ | FIELD _ | CALL _ ->
+    failwith "Array index is not a constant integer expression"
+  | CONST_INT i -> i
+  | CONST_CHAR c -> int_of_char c
+  | ARITH_BOP (op, e1, e2) -> (
+    let v1 = eval_const_integer e1 in
+    let v2 = eval_const_integer e2 in
+    match op with
+    | ADD -> v1 + v2
+    | SUB -> v1 - v2
+    | MUL -> v1 * v2
+    | DIV -> v1 / v2
+    | MOD -> v1 mod v2
+    | BOR -> v1 lor v2
+    | BAND -> v1 land v2)
+  | REL_BOP (op, e1, e2) -> (
+    let v1 = eval_const_integer e1 in
+    let v2 = eval_const_integer e2 in
+    let b =
+      match op with
+      | GT -> v1 > v2
+      | LT -> v1 < v2
+      | GEQ -> v1 >= v2
+      | LEQ -> v1 <= v2
+      | LOR -> v1 != 0 || v2 != 0
+      | LAND -> v1 != 0 && v2 != 0
+      | EQ -> v1 = v2
+      | NEQ -> v1 != v2
+    in
+    match b with true -> 1 | false -> 0)
+  | ARITH_UOP ((PRE_INCR | POST_INCR | PRE_DECR | POST_DECR), _) ->
+    failwith "Array index is not a constant integer expression"
+  | ARITH_UOP (BNOT, e) -> -eval_const_integer e - 1
+  | ARITH_UOP (NEG, e) -> -eval_const_integer e
+  | REL_UOP (LNOT, e) -> if eval_const_integer e = 0 then 1 else 0
 
 let rec print_pgm pgm =
   List.iter
@@ -64,24 +100,12 @@ and print_toplevel = function
     print_endline "";
     print_local l
 
-and print_decl = function
-  | DECL_VAL d -> print_val_decl d
-  | DECL_STRUCT d -> print_struct_decl d
+and print_decl = function DECL_VAR d -> print_var_decl d | _ -> ()
 
-and print_val_decl = function
-  | DECL_VAR d -> print_var_decl d
-  | DECL_FUN d -> print_fun_decl d
-
-and print_var_decl = function
-  | t, x, None ->
-    print_string x;
-    print_string " is of type ";
-    print_ty t
-  | t, x, Some _ ->
-    print_string x;
-    print_string " is of type ";
-    print_ty t;
-    print_string " array"
+and print_var_decl (t, x) =
+  print_string x;
+  print_string " is of type ";
+  print_ty t
 
 and print_fun_decl = function
   | t, f, l ->
@@ -95,34 +119,18 @@ and print_fun_decl = function
         print_endline ",")
       l
 
-and print_struct_decl = function
-  | None, l ->
-    print_endline "anonymous struct with fields: {";
-    List.iter
-      (fun d ->
-        print_val_decl d;
-        print_endline ",")
-      l;
-    print_endline "}"
-  | Some id, l ->
-    print_endline ("struct with name " ^ id ^ " with fields: {");
-    List.iter
-      (fun d ->
-        print_val_decl d;
-        print_endline ",")
-      l;
-    print_endline "}"
-
 and print_ty = function
   | INT -> print_string "int"
   | CHAR -> print_string "char"
   | VOID -> print_string "void"
-  | STRUCT_NAMED id -> print_string ("struct with name " ^ id)
-  | STRUCT_DECLARED d -> print_struct_decl d
+  | STRUCT id -> print_string ("struct " ^ id)
   | PTR t ->
-    print_string "(";
+    print_string "pointer to ";
+    print_ty t
+  | ARR (t, i) ->
+    print_string "array to ";
     print_ty t;
-    print_string ")*"
+    print_string (" with length " ^ string_of_int i)
 
 and print_local = function
   | d_l, s_l ->
@@ -233,8 +241,8 @@ and print_expr = function
     print_string ")"
 
 and print_arith_bop = function
-  | PLUS -> print_string "+"
-  | MINUS -> print_string "-"
+  | ADD -> print_string "+"
+  | SUB -> print_string "-"
   | MUL -> print_string "*"
   | DIV -> print_string "/"
   | MOD -> print_string "%"

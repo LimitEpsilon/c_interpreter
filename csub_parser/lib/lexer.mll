@@ -58,6 +58,7 @@ rule start =
      | "/*" { comment_depth :=1;
               comment lexbuf;
               start lexbuf }
+     | "//" [^'\n']* '\n' { start lexbuf }
      | number { NUM (int_of_string (verbose (Lexing.lexeme lexbuf))) }
      | id { let id = Lexing.lexeme lexbuf in
        try Hashtbl.find keyword_tbl (verbose_id id) with _ -> ID id }
