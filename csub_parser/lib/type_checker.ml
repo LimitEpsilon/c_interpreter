@@ -1,6 +1,7 @@
 open Csub
 
 type ext_ty = RVALUE of ty | LVALUE of ty | FUNCTION of (ty * ty list)
+(** rvalue : both the address and the value is known *)
 
 exception Double_declaration of id
 exception Invalid_field of id
@@ -233,10 +234,10 @@ and check_rel_bop (op, t1, t2) =
 
 and check_arith_uop (op, t) =
   match op with
-  | PRE_INCR | POST_INCR | PRE_DECR | POST_DECR -> (
+  | PRE_INCR | PRE_DECR | POST_INCR | POST_DECR -> (
     match t with
-    | LVALUE INT | LVALUE (PTR _) -> t
-    | _ -> failwith "Incrementing a rvalue is not permitted!")
+    | LVALUE (INT | PTR _ as t) -> RVALUE t
+    | _ -> failwith "(Incr/Decr)-ementing a rvalue is not permitted!")
   | BNOT | NEG -> (
     match t with
     | LVALUE INT | RVALUE INT -> RVALUE INT
