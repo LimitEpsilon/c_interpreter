@@ -63,9 +63,6 @@ let handle_var_decl (ty, id_list) =
 %token <string> RELOP
 %token <string> EQUOP
 
-%right NOELSE
-%left ELSE
-
 %start program
 %type <Csub.pgm> program
 
@@ -142,23 +139,28 @@ local: LBRACE decl_list stmt_list RBRACE { ($2, $3) }
 stmt_list: { [] }
     | stmt_list stmt { $1 @ [$2] }
     ;
-stmt: local { Csub.SCOPE $1 }
+stmt: closed_stmt { $1 }
+    | open_stmt { $1 }
+    ;
+closed_stmt: local { Csub.SCOPE $1 }
     | expr SEMICOLON { Csub.EXPR $1 }
     | RETURN expr_opt SEMICOLON { Csub.RETURN $2 }
-    | IF LPAREN expr_opt RPAREN stmt else_opt { Csub.IF ($3, $5, $6) }
-    | WHILE LPAREN expr_opt RPAREN stmt { Csub.WHILE ($3, $5) }
-    | FOR LPAREN expr_opt SEMICOLON expr_opt SEMICOLON expr_opt RPAREN stmt { Csub.FOR ($3, $5, $7, $9) }
+    | WHILE LPAREN expr_opt RPAREN closed_stmt { Csub.WHILE ($3, $5) }
+    | FOR LPAREN expr_opt SEMICOLON expr_opt SEMICOLON expr_opt RPAREN closed_stmt { Csub.FOR ($3, $5, $7, $9) }
     | BREAK SEMICOLON { Csub.BREAK }
     | CONTINUE SEMICOLON { Csub.CONTINUE }
     | SEMICOLON { Csub.EMPTY }
+    | IF LPAREN expr_opt RPAREN closed_stmt ELSE closed_stmt { Csub.IF ($3, $5, Some $7) }
     ;
-else_opt: %prec NOELSE { None }
-    | ELSE stmt { Some $2 }
+open_stmt: IF LPAREN expr_opt RPAREN stmt { Csub.IF ($3, $5, None) }
+    | IF LPAREN expr_opt RPAREN closed_stmt ELSE open_stmt { Csub.IF ($3, $5, Some $7) }
+    | WHILE LPAREN expr_opt RPAREN open_stmt { Csub.WHILE ($3, $5) }
+    | FOR LPAREN expr_opt SEMICOLON expr_opt SEMICOLON expr_opt RPAREN open_stmt { Csub.FOR ($3, $5, $7, $9) }
     ;
 expr_opt: { None }
     | expr { Some $1 }
     ;
-expr: expr ASSIGNOP expr { transl_assign ($2, $1, $3) }
+expr: expr ASSIGNOP or_expr { transl_assign ($2, $1, $3) }
     | or_expr { $1 }
     ;
 or_expr: or_expr LOR and_expr { Csub.REL_BOP (LOR, $1, $3) }
@@ -167,40 +169,42 @@ or_expr: or_expr LOR and_expr { Csub.REL_BOP (LOR, $1, $3) }
 and_expr: and_expr LAND binary { Csub.REL_BOP (LAND, $1, $3) }
     | binary { $1 }
     ;
-binary: binary RELOP binary { Csub.REL_BOP (transl_rel $2, $1, $3) }
-    | binary EQUOP binary { Csub.REL_BOP (transl_eq $2, $1, $3) }
-    | binary STAR binary { Csub.ARITH_BOP (MUL, $1, $3) }
-    | binary DIV binary { Csub.ARITH_BOP (DIV, $1, $3) }
-    | binary MOD binary { Csub.ARITH_BOP (MOD, $1, $3) }
-    | binary PLUS binary { Csub.ARITH_BOP (ADD, $1, $3) }
-    | binary MINUS binary { Csub.ARITH_BOP (SUB, $1, $3) }
-    | binary AMP binary { Csub.ARITH_BOP (BAND, $1, $3) }
-    | binary BOR binary { Csub.ARITH_BOP (BOR, $1, $3) }
+binary: binary RELOP unary { Csub.REL_BOP (transl_rel $2, $1, $3) }
+    | binary EQUOP unary { Csub.REL_BOP (transl_eq $2, $1, $3) }
+    | binary STAR unary { Csub.ARITH_BOP (MUL, $1, $3) }
+    | binary DIV unary { Csub.ARITH_BOP (DIV, $1, $3) }
+    | binary MOD unary { Csub.ARITH_BOP (MOD, $1, $3) }
+    | binary PLUS unary { Csub.ARITH_BOP (ADD, $1, $3) }
+    | binary MINUS unary { Csub.ARITH_BOP (SUB, $1, $3) }
+    | binary AMP unary { Csub.ARITH_BOP (BAND, $1, $3) }
+    | binary BOR unary { Csub.ARITH_BOP (BOR, $1, $3) }
     | unary { $1 }
     ;
-unary: LPAREN expr RPAREN { $2 }
+unary: MINUS atom { Csub.ARITH_UOP (NEG, $2) }
+    | LNOT atom { Csub.REL_UOP (LNOT, $2) }
+    | BNOT atom { Csub.ARITH_UOP (BNOT, $2) }
+    | INCR atom { Csub.ARITH_UOP (PRE_INCR, $2) }
+    | DECR atom { Csub.ARITH_UOP (PRE_DECR, $2) }
+    | AMP atom { Csub.REF $2 }
+    | STAR atom { Csub.DEREF ($2, CONST_INT 0) }
+    | atom { $1 }
+    ;
+atom: LPAREN expr RPAREN { $2 }
     | NUM { Csub.CONST_INT $1 }
     | CHAR_LIT { Csub.CONST_CHAR $1 }
     | ID { Csub.VAR $1 }
     | STRING_LIT { Csub.STRING $1 }
-    | MINUS unary { Csub.ARITH_UOP (NEG, $2) }
-    | LNOT unary { Csub.REL_UOP (LNOT, $2) }
-    | BNOT unary { Csub.ARITH_UOP (BNOT, $2) }
-    | unary INCR { Csub.ARITH_UOP (POST_INCR, $1) }
-    | unary DECR { Csub.ARITH_UOP (POST_DECR, $1) }
-    | INCR unary { Csub.ARITH_UOP (PRE_INCR, $2) }
-    | DECR unary { Csub.ARITH_UOP (PRE_DECR, $2) }
-    | AMP unary { Csub.REF $2 }
-    | STAR unary { Csub.DEREF ($2, CONST_INT 0) }
-    | unary LBRACKET expr RBRACKET { Csub.DEREF ($1, $3) }
-    | unary DOT ID { Csub.FIELD ($1, $3) }
-    | unary ARROW ID { Csub.FIELD (DEREF ($1, CONST_INT 0), $3) }
-    | unary LPAREN args RPAREN { Csub.CALL ($1, $3) }
+    | atom INCR { Csub.ARITH_UOP (POST_INCR, $1) }
+    | atom DECR { Csub.ARITH_UOP (POST_DECR, $1) }
+    | atom LBRACKET expr RBRACKET { Csub.DEREF ($1, $3) }
+    | atom DOT ID { Csub.FIELD ($1, $3) }
+    | atom ARROW ID { Csub.FIELD (DEREF ($1, CONST_INT 0), $3) }
+    | atom LPAREN args RPAREN { Csub.CALL ($1, $3) }
     ;
 args: { [] }
     | nonempty_args { $1 }
     ;
 nonempty_args: expr { [$1] }
     | nonempty_args COMMA expr { $1 @ [$3] }
-	;
+    ;
 %%

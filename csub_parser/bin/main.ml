@@ -9,6 +9,7 @@ let parse_with_error lexbuf =
   try Parser.program Lexer.start lexbuf
   with Parser.Error ->
     Printf.fprintf stderr "%a: syntax error\n" print_position lexbuf;
+    Printf.fprintf stderr "at character : %s\n" (Lexing.lexeme lexbuf);
     exit (-1)
 
 let main () =
