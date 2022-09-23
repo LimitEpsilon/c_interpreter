@@ -4,8 +4,9 @@ struct test {
 
 int main(void) {
   struct test a;
-  int x;
+  int x, *y, *z;
   a.arr = 0;
+  y - z;
   &(++x);
   return 0;
 }
