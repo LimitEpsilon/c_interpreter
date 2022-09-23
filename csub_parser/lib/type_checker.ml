@@ -1,13 +1,16 @@
 open Csub
 
-type ext_ty = RVALUE of ty | LVALUE of ty | FUNCTION of (ty * ty list)
-(** rvalue : both the address and the value is known *)
+type ext_ty =
+  | RVALUE of ty
+  | LVALUE of ty
+  | FUNCTION of (ty * ty list)
+      (** rvalue : both the address and the value is known *)
 
 exception Double_declaration of id
 exception Invalid_field of id
 exception Not_in_scope of id
 exception Invalid_array_size of id
-exception Type_mismatch of ext_ty * ext_ty
+exception Type_check_failure of string * expr
 
 exception
   Return_type_mismatch of ext_ty (* current return type is stored by ref *)
@@ -62,13 +65,12 @@ let enter_scope () =
 let rec check_pgm pgm =
   let top_env = Hashtbl.create 13 in
   push_env top_env;
-  (try List.iter check_top pgm
-   with Type_mismatch ((LVALUE t1 | RVALUE t1), (LVALUE t2 | RVALUE t2)) ->
-     print_endline "Type mismatch :";
-     print_ty t1;
-     print_newline ();
-     print_ty t2;
-     print_newline ());
+  (try List.iter check_top pgm with
+  | Type_check_failure (msg, expr) ->
+    print_expr expr;
+    print_newline ();
+    print_endline msg
+  | Failure msg -> print_endline msg);
   pgm
 
 and check_top = function
@@ -105,98 +107,113 @@ and check_stmt stmt =
   | IF (expr_o, stmt, stmt_o) ->
     (match check_expr_o expr_o with
     | RVALUE INT | LVALUE INT -> ()
-    | _ -> failwith "Predicate of if is not an integer!");
+    | _ ->
+      (match expr_o with
+      | None -> ()
+      | Some e ->
+        print_expr e;
+        print_newline ());
+      failwith "Predicate of if is not an integer!");
     check_stmt stmt;
     check_stmt_o stmt_o
   | WHILE (expr_o, stmt) ->
     (match check_expr_o expr_o with
     | RVALUE INT | LVALUE INT -> ()
-    | _ -> failwith "Predicate of while is not an integer!");
+    | _ ->
+      (match expr_o with
+      | None -> ()
+      | Some e ->
+        print_expr e;
+        print_newline ());
+      failwith "Predicate of while is not an integer!");
     check_stmt stmt
   | FOR (init, check, update, stmt) ->
     check_expr_o init |> ignore;
     (match check_expr_o check with
     | RVALUE INT | LVALUE INT -> ()
-    | _ -> failwith "Predicate of for is not an integer!");
+    | _ ->
+      (match check with
+      | None -> ()
+      | Some e ->
+        print_expr e;
+        print_newline ());
+      failwith "Predicate of for is not an integer!");
     check_expr_o update |> ignore;
     check_stmt stmt
   | BREAK | CONTINUE | EMPTY -> ()
 
 and check_expr expr =
-  let () =
-    if !debug then (
-      print_expr expr;
-      print_newline ())
-  in
-  match expr with
-  | VAR x -> get_var_type x
-  | CONST_INT _ -> RVALUE INT
-  | CONST_CHAR _ -> RVALUE CHAR
-  | STRING _ -> RVALUE (PTR CHAR)
-  | ASSIGN (lhs, rhs) -> (
-    let lhs_t = check_expr lhs in
-    let rhs_t = check_expr rhs in
-    match (lhs_t, rhs_t) with
-    | LVALUE (PTR t1), RVALUE (ARR (t2, _)) | LVALUE t1, (RVALUE t2 | LVALUE t2)
-      ->
-      if t1 = t2 then lhs_t else raise (Type_mismatch (lhs_t, rhs_t))
-    | _ -> raise (Type_mismatch (lhs_t, rhs_t)))
-  | REF e -> (
-    let t = check_expr e in
-    match t with
-    | LVALUE t -> RVALUE (PTR t)
-    | RVALUE _ -> failwith "Can't ref an rvalue"
-    | FUNCTION _ -> failwith "We don't support function pointers")
-  | DEREF (base, addr) -> (
-    let base_t = check_expr base in
-    let addr_t = check_expr addr in
-    match (base_t, addr_t) with
-    | LVALUE (PTR t), (LVALUE INT | RVALUE INT) -> LVALUE t
-    | RVALUE (ARR (t, _) | PTR t), (LVALUE INT | RVALUE INT) -> LVALUE t
-    | _ -> failwith "Dereference error")
-  | FIELD (str, fld) -> (
-    let str_t = check_expr str in
-    match str_t with
-    | LVALUE (STRUCT x) -> get_field_type x fld
-    | _ -> failwith "Tried to access field of non-struct expr!")
-  | CALL (f, args) -> (
-    let f_t = check_expr f in
-    match f_t with
-    | FUNCTION (ret_t, params_t) ->
-      let for_each_arg arg =
-        match check_expr arg with
-        | RVALUE (ARR (t, _)) -> PTR t
-        | LVALUE t | RVALUE t -> t
-        | _ -> failwith "Cannot pass function as a function argument!"
-      in
-      let args_t = List.map for_each_arg args in
-      if params_t = args_t then RVALUE ret_t
-      else failwith "Function called with invalid types!"
-    | _ -> failwith "Tried to call a non-function expression!")
-  | ARITH_BOP (arithop, e1, e2) -> (
-    let t1 = check_expr e1 in
-    let t2 = check_expr e2 in
-    match (t1, t2) with
-    | (LVALUE _ | RVALUE _), (LVALUE _ | RVALUE _) ->
-      check_arith_bop (arithop, t1, t2)
-    | _ -> failwith "Tried to perform arithmetic operation with functions!")
-  | REL_BOP (relop, e1, e2) -> (
-    let t1 = check_expr e1 in
-    let t2 = check_expr e2 in
-    match (t1, t2) with
-    | (LVALUE _ | RVALUE _), (LVALUE _ | RVALUE _) ->
-      check_rel_bop (relop, t1, t2)
-    | _ -> failwith "Tried to perform relational operation with functions!")
-  | ARITH_UOP (arithop, e) -> (
-    let t = check_expr e in
-    match t with
-    | LVALUE _ | RVALUE _ -> check_arith_uop (arithop, t)
-    | _ -> failwith "Tried to perform unary arithmetic with a function!")
-  | REL_UOP (relop, e) -> (
-    let t = check_expr e in
-    match t with
-    | LVALUE _ | RVALUE _ -> check_rel_uop (relop, t)
-    | _ -> failwith "Tried to perform unary relation op with a function!")
+  try
+    match expr with
+    | VAR x -> get_var_type x
+    | CONST_INT _ -> RVALUE INT
+    | CONST_CHAR _ -> RVALUE CHAR
+    | STRING _ -> RVALUE (PTR CHAR)
+    | ASSIGN (lhs, rhs) -> (
+      let lhs_t = check_expr lhs in
+      let rhs_t = check_expr rhs in
+      match (lhs_t, rhs_t) with
+      | LVALUE (PTR t1), RVALUE (ARR (t2, _))
+      | LVALUE t1, (RVALUE t2 | LVALUE t2) ->
+        if t1 = t2 then lhs_t else failwith "Assignment types don't match!"
+      | _ -> failwith "Can't assign to a rvalue!")
+    | REF e -> (
+      let t = check_expr e in
+      match t with
+      | LVALUE t -> RVALUE (PTR t)
+      | RVALUE _ -> failwith "Can't ref an rvalue!"
+      | FUNCTION _ -> failwith "We don't support function pointers!")
+    | DEREF (base, addr) -> (
+      let base_t = check_expr base in
+      let addr_t = check_expr addr in
+      match (base_t, addr_t) with
+      | LVALUE (PTR t), (LVALUE INT | RVALUE INT) -> LVALUE t
+      | RVALUE (ARR (t, _) | PTR t), (LVALUE INT | RVALUE INT) -> LVALUE t
+      | _ -> failwith "Dereference error!")
+    | FIELD (str, fld) -> (
+      let str_t = check_expr str in
+      match str_t with
+      | LVALUE (STRUCT x) -> get_field_type x fld
+      | _ -> failwith "Tried to access field of non-struct expr!")
+    | CALL (f, args) -> (
+      let f_t = check_expr f in
+      match f_t with
+      | FUNCTION (ret_t, params_t) ->
+        let for_each_arg arg =
+          match check_expr arg with
+          | RVALUE (ARR (t, _)) -> PTR t
+          | LVALUE t | RVALUE t -> t
+          | _ -> failwith "Cannot pass function as a function argument!"
+        in
+        let args_t = List.map for_each_arg args in
+        if params_t = args_t then RVALUE ret_t
+        else failwith "Function called with invalid types!"
+      | _ -> failwith "Tried to call a non-function expression!")
+    | ARITH_BOP (arithop, e1, e2) -> (
+      let t1 = check_expr e1 in
+      let t2 = check_expr e2 in
+      match (t1, t2) with
+      | (LVALUE _ | RVALUE _), (LVALUE _ | RVALUE _) ->
+        check_arith_bop (arithop, t1, t2)
+      | _ -> failwith "Tried to perform arithmetic operation with functions!")
+    | REL_BOP (relop, e1, e2) -> (
+      let t1 = check_expr e1 in
+      let t2 = check_expr e2 in
+      match (t1, t2) with
+      | (LVALUE _ | RVALUE _), (LVALUE _ | RVALUE _) ->
+        check_rel_bop (relop, t1, t2)
+      | _ -> failwith "Tried to perform relational operation with functions!")
+    | ARITH_UOP (arithop, e) -> (
+      let t = check_expr e in
+      match t with
+      | LVALUE _ | RVALUE _ -> check_arith_uop (arithop, t)
+      | _ -> failwith "Tried to perform unary arithmetic with a function!")
+    | REL_UOP (relop, e) -> (
+      let t = check_expr e in
+      match t with
+      | LVALUE _ | RVALUE _ -> check_rel_uop (relop, t)
+      | _ -> failwith "Tried to perform unary relation op with a function!")
+  with Failure s -> raise (Type_check_failure (s, expr))
 
 and check_arith_bop (op, t1, t2) =
   match op with
@@ -236,7 +253,7 @@ and check_arith_uop (op, t) =
   match op with
   | PRE_INCR | PRE_DECR | POST_INCR | POST_DECR -> (
     match t with
-    | LVALUE (INT | PTR _ as t) -> RVALUE t
+    | LVALUE ((INT | PTR _) as t) -> RVALUE t
     | _ -> failwith "(Incr/Decr)-ementing a rvalue is not permitted!")
   | BNOT | NEG -> (
     match t with
