@@ -2,7 +2,9 @@ type pgm = toplevel list
 and toplevel = TOP_DECL of decl | FUN of fun_decl * local
 and local = decl list * stmt list
 and decl = DECL_VAR of var_decl | DECL_FUN of fun_decl
-and struct_tbl = (id, decl list) Hashtbl.t
+and fld = VAR_FLD of ty | FUN_FLD
+and struct_tbl = (id, (id, fld) Hashtbl.t) Hashtbl.t
+and function_tbl = (id, ty * ty list) Hashtbl.t
 and var_decl = ty * id
 and fun_decl = ty * id * var_decl list
 and ty = INT | CHAR | VOID | STRUCT of id | PTR of ty | ARR of ty * int
@@ -39,12 +41,39 @@ and uop_arith = PRE_INCR | POST_INCR | PRE_DECR | POST_DECR | BNOT | NEG
 and uop_rel = LNOT
 and id = string
 
+let debug : bool ref = ref false
 let struct_tbl : struct_tbl = Hashtbl.create 31
+let function_tbl : function_tbl = Hashtbl.create 31
+
+let insert_function (decl : fun_decl) =
+  let t, f, l = decl in
+  let l = List.map (fun d -> fst d) l in
+  match Hashtbl.find function_tbl f with
+  | t', l' ->
+    if t = t' && l = l' then ()
+    else
+      failwith
+        ("Declaration of function " ^ f
+       ^ " doesn't match the type of the previous declaration.")
+  | exception _ -> Hashtbl.add function_tbl f (t, l)
 
 let insert_struct id decls =
   if Hashtbl.mem struct_tbl id then
     failwith ("Structure " ^ id ^ " is already defined, cannot redefine.")
-  else Hashtbl.add struct_tbl id decls
+  else
+    let flds = Hashtbl.create 11 in
+    let for_each_decl = function
+      | DECL_VAR (t, x) ->
+        if Hashtbl.mem flds x then
+          failwith ("Redeclaration of field " ^ x ^ " in struct " ^ id)
+        else Hashtbl.add flds x (VAR_FLD t)
+      | DECL_FUN (_, f, _) ->
+        if Hashtbl.mem flds f then
+          failwith ("Redeclaration of field " ^ f ^ " in struct " ^ id)
+        else Hashtbl.add flds f FUN_FLD
+    in
+    List.iter for_each_decl decls;
+    Hashtbl.add struct_tbl id flds
 
 let rec eval_const_integer = function
   | VAR _ | STRING _ | ASSIGN _ | REF _ | DEREF _ | FIELD _ | CALL _ ->

@@ -73,6 +73,7 @@ rule start =
      | "-" {MINUS}
      | "*" {STAR}
      | "/" {DIV}
+     | "%" {MOD}
      | "&" {AMP}
      | "++" {INCR}
      | "--" {DECR}
@@ -92,7 +93,7 @@ rule start =
 	 | "{" {LBRACE}
 	 | "}" {RBRACE}
      | eof {EOF}
-     | _ {raise LexicalError}
+     | _ { print_endline (Lexing.lexeme lexbuf); raise LexicalError}
 
 and comment = parse
      "/*" {comment_depth := !comment_depth+1; comment lexbuf}
