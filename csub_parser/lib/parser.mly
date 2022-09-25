@@ -5,6 +5,8 @@
  */
 
 %{
+open Type_checker
+
 let str_unique_label = ref 0
 
 let new_anonymous_struct () =
@@ -12,13 +14,39 @@ let new_anonymous_struct () =
   incr str_unique_label;
   s
 
-let transl_assign : string * Csub.expr * Csub.expr -> Csub.expr = function
-    | ("=", e1, e2) -> ASSIGN (e1, e2)
-    | ("+=", e1, e2) -> ASSIGN (e1, ARITH_BOP (ADD, e1, e2))
-    | ("-=", e1, e2) -> ASSIGN (e1, ARITH_BOP (SUB, e1, e2))
-    | ("/=", e1, e2) -> ASSIGN (e1, ARITH_BOP (DIV, e1, e2))
-    | ("*=", e1, e2) -> ASSIGN (e1, ARITH_BOP (MUL, e1, e2))
-    | ("%=", e1, e2) -> ASSIGN (e1, ARITH_BOP (MOD, e1, e2))
+let transl_assign = function
+    | ("=", (t1, e1), (t2, e2)) ->
+       (match (t1, t2) with
+        | LVALUE (PTR t1), RVALUE (ARR (t2, _))
+        | LVALUE t1, (RVALUE t2 | LVALUE t2) ->
+           if t1 = t2 then () else failwith "Assignment types don't match!"
+        | _ -> failwith "Can't assign to a rvalue!");
+       (t1, Csub.ASSIGN (e1, e2))
+    | ("+=", (t1, e1), (t2, e2)) ->
+       (match (t1, t2) with
+        | LVALUE INT, (RVALUE INT | LVALUE INT) -> ()
+        | _ -> failwith "Assignment types don't match!");
+       (t1, Csub.ASSIGN (e1, ARITH_BOP (ADD, e1, e2)))
+    | ("-=", (t1, e1), (t2, e2)) ->
+       (match (t1, t2) with
+        | LVALUE INT, (RVALUE INT | LVALUE INT) -> ()
+        | _ -> failwith "Assignment types don't match!");
+       (t1, Csub.ASSIGN (e1, ARITH_BOP (SUB, e1, e2)))
+    | ("/=", (t1, e1), (t2, e2)) ->
+       (match (t1, t2) with
+        | LVALUE INT, (RVALUE INT | LVALUE INT) -> ()
+        | _ -> failwith "Assignment types don't match!");
+       (t1, Csub.ASSIGN (e1, ARITH_BOP (DIV, e1, e2)))
+    | ("*=", (t1, e1), (t2, e2)) ->
+       (match (t1, t2) with
+        | LVALUE INT, (RVALUE INT | LVALUE INT) -> ()
+        | _ -> failwith "Assignment types don't match!");
+       (t1, Csub.ASSIGN (e1, ARITH_BOP (MUL, e1, e2)))
+    | ("%=", (t1, e1), (t2, e2)) ->
+       (match (t1, t2) with
+        | LVALUE INT, (RVALUE INT | LVALUE INT) -> ()
+        | _ -> failwith "Assignment types don't match!");
+       (t1, Csub.ASSIGN (e1, ARITH_BOP (MOD, e1, e2)))
     | (s, _, _) -> failwith (s ^ " is not a valid assignop!")
 
 let transl_rel : string -> Csub.bop_rel = function
@@ -35,7 +63,7 @@ let transl_eq : string -> Csub.bop_rel = function
 
 let rec make_ptr (ty, ptrs) =
   let prevent_premature_struct = function
-    | Csub.STRUCT x -> if Hashtbl.mem Csub.struct_tbl x then ()
+    | Csub.STRUCT x -> if Hashtbl.mem struct_tbl x then ()
                   else failwith ("Struct " ^ x ^ " used before definition!")
     | _ -> ()
   in
@@ -50,6 +78,10 @@ let handle_var_decl (ty, id_list) =
     | Some i -> (Csub.ARR (make_ptr (ty, ptrs), i), id)
   in
   List.map map id_list
+
+let check_predicate = function
+    | (LVALUE INT | RVALUE INT) -> ()
+    | _ -> failwith "Predicate must be int!"
 %}
 %token EOF SEMICOLON COMMA
 %token LBRACKET RBRACKET LBRACE RBRACE LPAREN RPAREN
@@ -70,30 +102,39 @@ let handle_var_decl (ty, id_list) =
 
 program: top_list EOF { $1 }
     ;
-top_list: { [] }
+top_list: { push_env (Hashtbl.create 11); [] }
     | top_list top { $1 @ $2 }
     ;
 top: ty var_decls SEMICOLON
-        { List.map (fun decl -> Csub.TOP_DECL (DECL_VAR decl))
-                   (handle_var_decl ($1, $2)) }
+        { let decls = List.map (fun d -> Csub.DECL_VAR d) (handle_var_decl ($1, $2))
+          in
+          List.map (fun d -> update_env d; Csub.TOP_DECL d) decls }
     | ty ptrs fun_decl SEMICOLON
         { let t = make_ptr ($1, $2) in
           let decl = (t, fst $3, snd $3) in
-          Csub.insert_function decl;
+          insert_function decl;
+          update_env (DECL_FUN decl);
           [Csub.TOP_DECL (DECL_FUN decl)] }
     | ty SEMICOLON { [] }
-    | ty ptrs fun_decl local
-        { let t = make_ptr ($1, $2) in
-          let decl = (t, fst $3, snd $3) in
-          Csub.insert_function decl;
-          [Csub.FUN (decl, $4)] }
+    | enter_function decl_list stmt_list RBRACE
+        { pop_env (); [Csub.FUN ($1, ($2, $3))] }
+    ;
+enter_function: ty ptrs fun_decl LBRACE {
+         let t = make_ptr ($1, $2) in
+         let decl = (t, fst $3, snd $3) in
+         update_env (DECL_FUN decl);
+         insert_function decl;
+         current_return_ty := t;
+         push_env (Hashtbl.create 5);
+         List.iter (fun d -> update_env (DECL_VAR d)) (snd $3);
+         decl }
     ;
 var_decls: var_decl { [$1] }
     | var_decls COMMA var_decl { $1 @ [$3] }
     ;
 var_decl: ptrs ID { ($2, $1, None) }
     | ptrs ID LBRACKET RBRACKET { ($2, $1 + 1, None) }
-    | ptrs ID LBRACKET expr RBRACKET { ($2, $1, Some (Csub.eval_const_integer $4)) }
+    | ptrs ID LBRACKET expr RBRACKET { ($2, $1, Some (Csub.eval_const_integer (snd $4))) }
     ;
 ptrs: { 0 }
     | ptrs STAR { $1 + 1 }
@@ -104,12 +145,14 @@ decl_list: { [] }
     | decl_list decl { $1 @ $2 }
     ;
 decl: ty var_decls SEMICOLON
-        { List.map (fun decl -> Csub.DECL_VAR decl) (handle_var_decl ($1, $2)) }
+        { let decls = List.map (fun decl -> Csub.DECL_VAR decl) (handle_var_decl ($1, $2))
+          in List.iter update_env decls; decls }
     | ty ptrs fun_decl SEMICOLON
         { let t = make_ptr ($1, $2) in
           let decl = (t, fst $3, snd $3) in
-          Csub.insert_function decl;
-          [Csub.DECL_FUN decl] }
+          insert_function decl;
+          let decls = [Csub.DECL_FUN decl]
+          in List.iter update_env decls; decls }
     | ty SEMICOLON { [] }
     ;
 param_list: { [] }
@@ -128,13 +171,16 @@ ty: INT { Csub.INT }
     | CHAR { Csub.CHAR }
     | VOID { Csub.VOID }
     | STRUCT ID { Csub.STRUCT $2 }
-    | STRUCT LBRACE decl_list RBRACE
-        { let name = new_anonymous_struct () in
-          Csub.insert_struct name $3; Csub.STRUCT name }
-    | STRUCT ID LBRACE decl_list RBRACE
-        { Csub.insert_struct $2 $4; Csub.STRUCT $2 }
+    | enter_struct decl_list RBRACE
+        { let name = $1 in
+          insert_struct name (top_env ());
+          pop_env ();
+          Csub.STRUCT name }
     ;
-local: LBRACE decl_list stmt_list RBRACE { ($2, $3) }
+enter_struct: STRUCT LBRACE { push_env (Hashtbl.create 5); new_anonymous_struct () }
+    | STRUCT ID LBRACE { push_env (Hashtbl.create 5); $2 }
+    ;
+enter_scope: LBRACE { push_env (Hashtbl.create 5) }
     ;
 stmt_list: { [] }
     | stmt_list stmt { $1 @ [$2] }
@@ -142,26 +188,48 @@ stmt_list: { [] }
 stmt: closed_stmt { $1 }
     | open_stmt { $1 }
     ;
-closed_stmt: local { Csub.SCOPE $1 }
-    | expr SEMICOLON { Csub.EXPR $1 }
-    | RETURN expr_opt SEMICOLON { Csub.RETURN $2 }
-    | WHILE LPAREN expr_opt RPAREN closed_stmt { Csub.WHILE ($3, $5) }
-    | FOR LPAREN expr_opt SEMICOLON expr_opt SEMICOLON expr_opt RPAREN closed_stmt { Csub.FOR ($3, $5, $7, $9) }
+closed_stmt: enter_scope decl_list stmt_list RBRACE { pop_env (); Csub.SCOPE ($2, $3) }
+    | expr SEMICOLON { Csub.EXPR (snd $1) }
+    | RETURN expr_opt SEMICOLON
+        { (match fst $2 with
+            | (LVALUE t | RVALUE t) ->
+               if t = !current_return_ty
+               then ()
+               else (Csub.print_ty t; failwith "Return type mismatch!")
+            | _ -> failwith "Return type mismatch!");
+          Csub.RETURN (snd $2) }
+    | WHILE LPAREN expr_opt RPAREN closed_stmt
+        { check_predicate (fst $3);
+          Csub.WHILE (snd $3, $5) }
+    | FOR LPAREN expr_opt SEMICOLON expr_opt SEMICOLON expr_opt RPAREN closed_stmt
+        { check_predicate (fst $5);
+          Csub.FOR (snd $3, snd $5, snd $7, $9) }
     | BREAK SEMICOLON { Csub.BREAK }
     | CONTINUE SEMICOLON { Csub.CONTINUE }
     | SEMICOLON { Csub.EMPTY }
-    | IF LPAREN expr_opt RPAREN closed_stmt ELSE closed_stmt { Csub.IF ($3, $5, Some $7) }
+    | IF LPAREN expr_opt RPAREN closed_stmt ELSE closed_stmt
+        { check_predicate (fst $3);
+          Csub.IF (snd $3, $5, Some $7) }
     ;
-open_stmt: IF LPAREN expr_opt RPAREN stmt { Csub.IF ($3, $5, None) }
-    | IF LPAREN expr_opt RPAREN closed_stmt ELSE open_stmt { Csub.IF ($3, $5, Some $7) }
-    | WHILE LPAREN expr_opt RPAREN open_stmt { Csub.WHILE ($3, $5) }
-    | FOR LPAREN expr_opt SEMICOLON expr_opt SEMICOLON expr_opt RPAREN open_stmt { Csub.FOR ($3, $5, $7, $9) }
+open_stmt: IF LPAREN expr_opt RPAREN stmt
+        { check_predicate (fst $3);
+          Csub.IF (snd $3, $5, None) }
+    | IF LPAREN expr_opt RPAREN closed_stmt ELSE open_stmt
+        { check_predicate (fst $3);
+          Csub.IF (snd $3, $5, Some $7) }
+    | WHILE LPAREN expr_opt RPAREN open_stmt
+        { check_predicate (fst $3);
+          Csub.WHILE (snd $3, $5) }
+    | FOR LPAREN expr_opt SEMICOLON expr_opt SEMICOLON expr_opt RPAREN open_stmt
+        { check_predicate (fst $5);
+          Csub.FOR (snd $3, snd $5, snd $7, $9) }
     ;
-expr_opt: { None }
-    | expr { Some $1 }
+expr_opt: { (RVALUE INT, None) }
+    | expr { let e = $1 in (fst e, Some (snd e)) }
     ;
-expr: expr ASSIGNOP or_expr { transl_assign ($2, $1, $3) }
-    | or_expr { $1 }
+expr: expr ASSIGNOP or_expr
+        { transl_assign ($2, $1, (check_expr $3, $3)) }
+    | or_expr { let e = $1 in (check_expr e, e) }
     ;
 or_expr: or_expr LOR and_expr { Csub.REL_BOP (LOR, $1, $3) }
     | and_expr { $1 }
@@ -199,14 +267,14 @@ unary: MINUS atom { Csub.ARITH_UOP (NEG, $2) }
     | STAR atom { Csub.DEREF ($2, CONST_INT 0) }
     | atom { $1 }
     ;
-atom: LPAREN expr RPAREN { $2 }
+atom: LPAREN expr RPAREN { snd $2 }
     | NUM { Csub.CONST_INT $1 }
     | CHAR_LIT { Csub.CONST_CHAR $1 }
     | ID { Csub.VAR $1 }
     | STRING_LIT { Csub.STRING $1 }
     | atom INCR { Csub.ARITH_UOP (POST_INCR, $1) }
     | atom DECR { Csub.ARITH_UOP (POST_DECR, $1) }
-    | atom LBRACKET expr RBRACKET { Csub.DEREF ($1, $3) }
+    | atom LBRACKET expr RBRACKET { Csub.DEREF ($1, snd $3) }
     | atom DOT ID { Csub.FIELD ($1, $3) }
     | atom ARROW ID { Csub.FIELD (DEREF ($1, CONST_INT 0), $3) }
     | atom LPAREN args RPAREN { Csub.CALL ($1, $3) }
@@ -214,7 +282,7 @@ atom: LPAREN expr RPAREN { $2 }
 args: { [] }
     | nonempty_args { $1 }
     ;
-nonempty_args: expr { [$1] }
-    | nonempty_args COMMA expr { $1 @ [$3] }
+nonempty_args: expr { [snd $1] }
+    | nonempty_args COMMA expr { $1 @ [snd $3] }
     ;
 %%

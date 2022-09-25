@@ -32,7 +32,7 @@ let main () =
     let file_channel = open_in !src in
     let lexbuf = Lexing.from_channel file_channel in
     let () = if !print_code then Csub.debug := true in
-    try Type_checker.check_pgm (parse_with_error lexbuf) |> ignore
+    try parse_with_error lexbuf |> ignore
     with Lexer.LexicalError -> print_endline (!src ^ ": Lexical error")
 
 let _ = main ()

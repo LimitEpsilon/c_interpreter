@@ -17,12 +17,35 @@ exception
 
 type value = VAR_IN_SCOPE of ty | FUN_IN_SCOPE
 type env = (id, value) Hashtbl.t
+type function_tbl = (id, ty * ty list) Hashtbl.t
+type struct_tbl = (id, env) Hashtbl.t
 
 let env_stack : env list ref = ref []
 let push_env tbl = env_stack := tbl :: !env_stack
 let pop_env () = env_stack := List.tl !env_stack
 let top_env () = List.hd !env_stack
 let current_return_ty : ty ref = ref VOID
+
+let struct_tbl : struct_tbl = Hashtbl.create 31
+let function_tbl : function_tbl = Hashtbl.create 31
+
+let insert_function (decl : fun_decl) =
+  let t, f, l = decl in
+  let l = List.map (fun d -> fst d) l in
+  match Hashtbl.find function_tbl f with
+  | t', l' ->
+    if t = t' && l = l' then ()
+    else
+      failwith
+        ("Declaration of function " ^ f
+       ^ " doesn't match the type of the previous declaration.")
+  | exception _ -> Hashtbl.add function_tbl f (t, l)
+
+let insert_struct id env =
+  if Hashtbl.mem struct_tbl id then
+    failwith ("Structure " ^ id ^ " is already defined, cannot redefine.")
+  else
+    Hashtbl.add struct_tbl id env
 
 exception Found_var of ty
 exception Found_fun
@@ -44,8 +67,8 @@ let get_var_type x =
 let get_field_type str fld =
   let flds = Hashtbl.find struct_tbl str in
   match Hashtbl.find flds fld with
-  | VAR_FLD t -> ( match t with ARR _ -> RVALUE t | _ -> LVALUE t)
-  | FUN_FLD -> FUNCTION (Hashtbl.find function_tbl fld)
+  | VAR_IN_SCOPE t -> ( match t with ARR _ -> RVALUE t | _ -> LVALUE t)
+  | FUN_IN_SCOPE -> FUNCTION (Hashtbl.find function_tbl fld)
   | exception _ -> raise (Invalid_field fld)
 
 let update_env decl =
