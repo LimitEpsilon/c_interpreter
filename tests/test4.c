@@ -2,7 +2,6 @@ int main()
 {
   int a[2];
   int *b;
-  b = a;
-  'a' + a;
+  b = b = a;
   return 0;
 }
