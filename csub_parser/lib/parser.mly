@@ -227,8 +227,8 @@ open_stmt: IF LPAREN expr_opt RPAREN stmt
 expr_opt: { (RVALUE INT, None) }
     | expr { let e = $1 in (fst e, Some (snd e)) }
     ;
-expr: expr ASSIGNOP or_expr
-        { transl_assign ($2, $1, (check_expr $3, $3)) }
+expr: or_expr ASSIGNOP expr
+        { transl_assign ($2, (check_expr $1, $1), $3) }
     | or_expr { let e = $1 in (check_expr e, e) }
     ;
 or_expr: or_expr LOR and_expr { Csub.REL_BOP (LOR, $1, $3) }
