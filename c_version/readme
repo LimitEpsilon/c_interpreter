@@ -1,0 +1,12 @@
+SNU 430.414 Introduction to Compilers Project 4
+Code by 2018-12602 Joonhyup Lee (sunglasses99@snu.ac.kr)
+
+Development environment : Ubuntu 16.04(x64) on Docker with GNU Flex 2.6.0, GNU Bison 3.0.4, gcc 5.4.0
+
+How to compile : (assuming we are in the project base directory)
+  make
+
+How to test :
+  ./subc <source>          #print code to stdout
+  ./subc <source> <output> #print code to the output file
+  ./my-test.sh             #run the testcodes that are provided
